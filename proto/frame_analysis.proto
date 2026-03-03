@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package youzi.lin.server.grpc;
+
+message Frame {
+  int64 timestamp_ms = 1;
+  bytes image_data = 2;
+}
+
+message FrameBatchRequest {
+  string session_id = 1;
+  repeated Frame frames = 2;
+}
+
+message FrameBatchResponse {
+  string session_id = 1;
+  bytes payload = 2;
+}
+
+service FrameAnalysisService {
+  rpc AnalyzeFrames (FrameBatchRequest) returns (FrameBatchResponse);
+}
+

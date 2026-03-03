@@ -1,0 +1,9 @@
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
+grpcio-reflection>=1.62.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+open-rppg>=0.1.0
+numpy>=1.26.0
+opencv-python-headless>=4.9.0
+protobuf
