@@ -33,7 +33,7 @@ GRPC_PORT            = int(os.getenv("GRPC_PORT", "50051"))
 HTTP_PORT            = int(os.getenv("HTTP_PORT", "8000"))
 GRPC_MAX_WORKERS     = int(os.getenv("GRPC_MAX_WORKERS", "8"))
 RPPG_MODEL           = os.getenv("RPPG_MODEL", "FacePhys.rlap")
-SESSION_TIMEOUT      = int(os.getenv("SESSION_TIMEOUT", "120"))
+SESSION_TIMEOUT      = int(os.getenv("SESSION_TIMEOUT", "10"))
 
 # --- 模型池参数 ---
 # 固定容量：池始终维持该数量的预热实例，不动态扩容或缩容
