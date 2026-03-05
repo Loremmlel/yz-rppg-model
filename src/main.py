@@ -36,14 +36,8 @@ RPPG_MODEL           = os.getenv("RPPG_MODEL", "FacePhys.rlap")
 SESSION_TIMEOUT      = int(os.getenv("SESSION_TIMEOUT", "120"))
 
 # --- 模型池参数 ---
-# 初始（最小）预热实例数；也是池长期维持的最低空闲数量
-POOL_MIN_SIZE        = int(os.getenv("RPPG_POOL_MIN_SIZE", "2"))
-# 池允许的最大总实例数（空闲 + 使用中），0 = 不限制
-POOL_MAX_SIZE        = int(os.getenv("RPPG_POOL_MAX_SIZE", "0"))
-# 超过 min_size 的空闲实例，闲置超过此时长（秒）后销毁，实现自动缩容
-POOL_IDLE_TIMEOUT    = float(os.getenv("RPPG_POOL_IDLE_TIMEOUT", "300"))
-# 后台收缩线程检查周期（秒）
-POOL_SHRINK_INTERVAL = float(os.getenv("RPPG_POOL_SHRINK_INTERVAL", "60"))
+# 固定容量：池始终维持该数量的预热实例，不动态扩容或缩容
+POOL_SIZE            = int(os.getenv("RPPG_POOL_SIZE", "2"))
 
 # 最大消息长度（默认 64 MB，足够传 30 帧 JPEG）
 MAX_MESSAGE_LENGTH   = int(os.getenv("MAX_MESSAGE_LENGTH", str(64 * 1024 * 1024)))
@@ -60,10 +54,7 @@ logger = logging.getLogger(__name__)
 session_manager = SessionManager(
     model_name=RPPG_MODEL,
     timeout=SESSION_TIMEOUT,
-    pool_min_size=POOL_MIN_SIZE,
-    pool_max_size=POOL_MAX_SIZE,
-    pool_idle_timeout=POOL_IDLE_TIMEOUT,
-    pool_shrink_interval=POOL_SHRINK_INTERVAL,
+    pool_size=POOL_SIZE,
 )
 
 # ---------------------------------------------------------------------------
@@ -96,9 +87,7 @@ async def pool_stats():
     """返回模型池当前状态（空闲 / 使用中 / 总数）。"""
     stats = session_manager.pool_stats()
     stats.update({
-        "pool_min_size": POOL_MIN_SIZE,
-        "pool_max_size": POOL_MAX_SIZE if POOL_MAX_SIZE > 0 else "unlimited",
-        "pool_idle_timeout_sec": POOL_IDLE_TIMEOUT,
+        "pool_size": POOL_SIZE,
     })
     return stats
 
@@ -144,15 +133,9 @@ def serve_grpc() -> grpc.Server:
 # 主流程
 # ---------------------------------------------------------------------------
 def main():
-    # 0. 预热模型实例到 pool_min_size
-    logger.info(
-        "模型池配置：min=%d，max=%s，idle_timeout=%.0fs，shrink_interval=%.0fs",
-        POOL_MIN_SIZE,
-        POOL_MAX_SIZE if POOL_MAX_SIZE > 0 else "unlimited",
-        POOL_IDLE_TIMEOUT,
-        POOL_SHRINK_INTERVAL,
-    )
-    warmed = session_manager.prewarm(POOL_MIN_SIZE)
+    # 0. 预热模型实例到 pool_size
+    logger.info("模型池配置：固定容量=%d", POOL_SIZE)
+    warmed = session_manager.prewarm(POOL_SIZE)
     logger.info("模型池预热完成，共 %d 个实例就绪", warmed)
 
     # 1. 启动 gRPC 服务器

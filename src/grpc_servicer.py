@@ -85,7 +85,7 @@ class FrameAnalysisServicer(pb2_grpc.FrameAnalysisServiceServicer):
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
                 # 将人脸图像送入模型
-                # 图像已是 256x256 的人脸裁剪，可直接调用 update_face
+                # 图像已是ROI人脸裁剪，可直接调用 update_face
                 model.update_face(img_rgb, ts=ts_seconds)
 
             # 模型推理线程异步运行，稍作等待以处理新帧

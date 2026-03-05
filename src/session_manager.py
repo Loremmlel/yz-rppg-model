@@ -1,8 +1,8 @@
 """
 会话管理器：维护每个 session 的 rPPG Model 实例。
 
-每个 session_id 映射到持久化 Model 上下文，用于累计历史帧以提高 HR/HRV 计算准确性。
-内部通过 ModelPool 复用模型实例，避免每次请求重新加载权重。
+每个 session_id 映射到一个独占的 Model 实例。会话结束（客户端断连/超时）后，
+模型实例直接销毁，不再复用，模型池异步补充新实例保持固定容量。
 """
 
 import logging
@@ -36,11 +36,10 @@ class SessionManager:
     """
     线程安全的会话管理器，按 session 维护 rPPG Model 实例。
 
-    内部使用 ModelPool 进行模型复用：
+    内部使用 ModelPool 提供固定数量的预热模型：
       - 会话创建时从池中 acquire() 一个已预热的模型实例。
-      - 会话结束（超时/手动关闭）时将模型 release() 回池，
-        池会自动重置其上下文供下一个会话使用。
-      - 池在长时间空闲时会自动收缩到 pool_min_size，节约资源。
+      - 会话结束（超时/客户端断连）时销毁模型实例，
+        模型池异步补充新实例以维持固定容量。
 
     参数
     ----
@@ -48,24 +47,15 @@ class SessionManager:
         rPPG 模型名称。
     timeout : float
         会话空闲超时时间（秒）。
-    pool_min_size : int
-        模型池最小空闲实例数（同时也是预热数量）。
-    pool_max_size : int
-        模型池允许的最大总实例数（0 = 不限制）。
-    pool_idle_timeout : float
-        超过 min_size 的空闲实例，闲置超过此时长（秒）后销毁。
-    pool_shrink_interval : float
-        模型池后台收缩检查周期（秒）。
+    pool_size : int
+        模型池固定容量（同时也是预热数量）。
     """
 
     def __init__(
         self,
         model_name: str = DEFAULT_MODEL,
         timeout: float = SESSION_TIMEOUT_SECONDS,
-        pool_min_size: int = 2,
-        pool_max_size: int = 0,
-        pool_idle_timeout: float = 300.0,
-        pool_shrink_interval: float = 60.0,
+        pool_size: int = 2,
     ):
         self._sessions: dict[str, SessionState] = {}
         self._global_lock = threading.Lock()
@@ -73,23 +63,20 @@ class SessionManager:
         self._timeout = timeout
         self._closed = False
 
-        # 模型池（取代原先简单的 _warm_pool 列表）
+        # 固定容量模型池
         self._pool = ModelPool(
             model_name=model_name,
-            min_size=pool_min_size,
-            max_size=pool_max_size,
-            idle_timeout=pool_idle_timeout,
-            shrink_interval=pool_shrink_interval,
+            size=pool_size,
         )
 
     # ------------------------------------------------------------------
     # 公开接口
     # ------------------------------------------------------------------
 
-    def prewarm(self, count: int) -> int:
+    def prewarm(self, count: int = 0) -> int:
         """
         预热指定数量的模型实例放入池中，返回实际新建数量。
-        若 count <= 0，则预热至 pool_min_size。
+        若 count <= 0，则预热至 pool_size。
         """
         if count <= 0:
             return self._pool.prewarm()
@@ -111,14 +98,14 @@ class SessionManager:
             return state
 
     def remove_session(self, session_id: str) -> None:
-        """显式关闭并移除会话，将模型归还到池中."""
+        """显式关闭并移除会话，销毁其模型实例并补充新实例到池中."""
         with self._global_lock:
             state = self._sessions.pop(session_id, None)
         if state is not None:
-            self._return_session_model(state)
+            self._discard_session_model(state)
 
     def cleanup_expired(self) -> int:
-        """清理空闲超时的会话，将其模型归还到池中，返回清理数量."""
+        """清理空闲超时的会话，销毁其模型实例并补充新实例到池中，返回清理数量."""
         now = time.time()
         expired: list[SessionState] = []
         with self._global_lock:
@@ -130,9 +117,9 @@ class SessionManager:
                 expired.append(self._sessions.pop(sid))
 
         for state in expired:
-            logger.info("清理过期会话：%s（空闲 %.0fs）",
+            logger.info("清理过期会话：%s（空闲 %.0fs），销毁模型实例并补充新实例",
                         state.session_id, now - state.last_active)
-            self._return_session_model(state)
+            self._discard_session_model(state)
 
         return len(expired)
 
@@ -145,7 +132,7 @@ class SessionManager:
 
         for state in all_states:
             logger.info("关闭会话：%s", state.session_id)
-            self._return_session_model(state)
+            self._discard_session_model(state)
 
         # 关闭模型池（销毁所有空闲实例）
         self._pool.shutdown()
@@ -167,11 +154,11 @@ class SessionManager:
     # 内部方法
     # ------------------------------------------------------------------
 
-    def _return_session_model(self, state: SessionState) -> None:
-        """将会话持有的模型归还到模型池（而非销毁）."""
+    def _discard_session_model(self, state: SessionState) -> None:
+        """销毁会话持有的模型实例，并触发模型池异步补充新实例."""
         try:
-            # release 内部会重置模型上下文，无需在此处理
-            self._pool.release(state.model)
+            self._pool.discard(state.model)
             state.entered = False
         except Exception:
-            logger.exception("归还会话 %s 的模型时出错", state.session_id)
+            logger.exception("丢弃会话 %s 的模型实例时出错", state.session_id)
+
